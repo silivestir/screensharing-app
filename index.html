@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title> Splannes  </title>
+    <style>
+        video {
+            width: 100%;
+            height: auto;
+            border: 1px solid black;
+        }
+    </style>
+</head>
+<body>
+    <h1></h1>
+    <button id="share-screen">share now your screen  </button>
+ 
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+        const socket = io();
+        const video = document.getElementById('screen-video');
+        const shareButton = document.getElementById('share-screen');
+        let localStream;
+
+        shareButton.addEventListener('click', async () => {
+            localStream = await navigator.mediaDevices.getDisplayMedia({
+                video: true,
+                audio: true
+            });
+
+            video.srcObject = localStream;
+
+            // Send screen tracks to other users
+            socket.emit('screen', { tracks: localStream.getTracks().map(track => track.id) });
+        });
+
+        socket.on('screen', (data) => {
+            // Prepare to receive incoming stream
+            const peerConnection = new RTCPeerConnection({
+                iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] // Google STUN server
+            });
+
+            // Add received tracks to the peer connection
+            localStream.getTracks().forEach(track => {
+                peerConnection.addTrack(track, localStream);
+            });
+
+            peerConnection.onicecandidate = (event) => {
+                if (event.candidate) {
+                    socket.emit('ice-candidate', {
+                        candidate: event.candidate,
+                        to: data.id 
+                    });
+                }
+            };
+
+            peerConnection.ontrack = (event) => {
+                video.srcObject = event.streams[0];
+            };
+
+            // Create an offer to connect
+            peerConnection.createOffer().then(offer => {
+                return peerConnection.setLocalDescription(offer);
+            }).then(() => {
+                socket.emit('offer', {
+                    sdp: peerConnection.localDescription,
+                    to: data.id // Send offer to the specific user
+                });
+            });
+        });
+
+        socket.on('offer', (data) => {
+            const peerConnection = new RTCPeerConnection({
+                iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] // Google STUN server
+            });
+
+            localStream.getTracks().forEach(track => {
+                peerConnection.addTrack(track, localStream);
+            });
+
+            peerConnection.onicecandidate = (event) => {
+                if (event.candidate) {
+                    socket.emit('ice-candidate', {
+                        candidate: event.candidate,
+                        to: data.from 
+                    });
+                }
+            };
+
+            peerConnection.ontrack = (event) => {
+                video.srcObject = event.streams[0];
+            };
+
+            peerConnection.setRemoteDescription(new RTCSessionDescription(data.sdp))
+                .then(() => peerConnection.createAnswer())
+                .then(answer => peerConnection.setLocalDescription(answer))
+                .then(() => {
+                    socket.emit('answer', {
+                        sdp: peerConnection.localDescription,
+                        to: data.from 
+                    });
+                });
+        });
+
+        socket.on('answer', (data) => {
+            const peerConnection = new RTCPeerConnection({
+                iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] // Google STUN server
+            });
+
+            
+            peerConnection.setRemoteDescription(new RTCSessionDescription(data.sdp));
+        });
+
+        socket.on('ice-candidate', (data) => {
+            const peerConnection = new RTCPeerConnection({
+                iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] // Google STUN server
+            });
+
+            peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate)).catch(e => console.error(e));
+        });
+    </script>
+</body>
+</html>
